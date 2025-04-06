@@ -6,56 +6,56 @@ from ultralytics import YOLO
 # 1. Initialize model with proper weights loading
 original_load = torch.load
 torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
-model = YOLO('yolov10b-doclaynet.pt')  # Make sure this is the correct path
+model = YOLO('yolov10s-doclaynet.pt')  # Same weights that worked with images
 
-# 2. Initialize camera
+# 2. Initialize camera with matching image dimensions
 cap = cv2.VideoCapture(0)
-assert cap.isOpened(), "Error opening camera"
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Match your successful image width
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)  # Match your successful image height
 
-# 3. Use updated annotator names (as per Supervision 0.26.0+)
-box_annotator = sv.BoxAnnotator()  # Changed from BoundingBoxAnnotator
+# 3. Use same annotators as your working image code
+box_annotator = sv.BoxAnnotator()
 label_annotator = sv.LabelAnnotator()
 
-# 4. Main processing loop
 while True:
     ret, frame = cap.read()
-	
     if not ret:
         break
     
-    # 5. Run inference
-    results = model(frame, conf=0.5, iou=0.5)[0]
+    # 4. Apply identical preprocessing as your image pipeline
+    processed_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Most YOLO models expect RGB
     
-    # 6. Convert to Supervision Detections properly
+    # 5. Use EXACT same inference parameters as your working image code
+    results = model(
+        processed_frame, 
+        imgsz=1024,  # Match your successful image size
+        conf=0.2,    # Match your image confidence threshold
+        iou=0.8      # Match your image IOU threshold
+    )[0]
+    
+    # 6. Convert detections identically to your image pipeline
     detections = sv.Detections.from_ultralytics(results)
     
-    # 7. Filter text detections (adjust class_id as needed)
+    # 7. Apply same class filtering logic
     text_detections = sv.Detections(
-        xyxy=detections.xyxy[detections.class_id == 0],  # Class 0 for text
-        confidence=detections.confidence[detections.class_id == 0],
-        class_id=detections.class_id[detections.class_id == 0]
+        xyxy=detections.xyxy,
+        confidence=detections.confidence,
+        class_id=detections.class_id
     )
     
-    # 8. Annotate frame
-    annotated_frame = box_annotator.annotate(
-        scene=frame.copy(),
-        detections=text_detections
-    )
+    # 8. Annotate identically to your working version
+    annotated_frame = box_annotator.annotate(frame.copy(), text_detections)
     
-    # 9. Add labels only if detections exist
+    # 9. Only add labels if detections exist (prevents crashes)
     if len(text_detections) > 0:
         labels = [
             f"{model.names[class_id]} {confidence:.2f}"
-            for confidence, class_id in zip(text_detections.confidence, text_detections.class_id)
+            for confidence, class_id 
+            in zip(text_detections.confidence, text_detections.class_id)
         ]
-        annotated_frame = label_annotator.annotate(
-            scene=annotated_frame,
-            detections=text_detections,
-            labels=labels
-        )
+        annotated_frame = label_annotator.annotate(annotated_frame, text_detections, labels)
     
-    # 10. Display
-    cv2.imshow("Live Text Detection", annotated_frame)
+    cv2.imshow("Live Detection", annotated_frame)
     if cv2.waitKey(1) == ord('q'):
         break
 
