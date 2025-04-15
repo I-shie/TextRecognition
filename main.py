@@ -24,6 +24,17 @@ label_annotator = sv.LabelAnnotator()
 last_boxes = None
 last_texts = []
 
+# Function to wrap text into multiple lines
+def wrap_text(text, max_line_length=30):
+    lines = []
+    words = text.split()
+    while words:
+        line = ''
+        while words and len(line + words[0]) <= max_line_length:
+            line += (words.pop(0) + ' ')
+        lines.append(line.strip())
+    return lines
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -48,9 +59,8 @@ while True:
     current_boxes = text_detections.xyxy if len(text_detections) > 0 else None
     boxes_changed = True
     if last_boxes is not None and current_boxes is not None:
-    	if last_boxes.shape == current_boxes.shape:
-      	    boxes_changed = not (last_boxes == current_boxes).all()
-
+        if last_boxes.shape == current_boxes.shape:
+            boxes_changed = not (last_boxes == current_boxes).all()
 
     # Run OCR only if boxes changed
     if boxes_changed and current_boxes is not None:
@@ -63,10 +73,17 @@ while True:
             last_texts.append(text.strip())
         last_boxes = current_boxes
 
-    # Draw labels from OCR
+    # Draw labels inside the bounding boxes (with text wrapping)
     if current_boxes is not None and len(last_texts) == len(current_boxes):
-        labels = last_texts
-        annotated_frame = label_annotator.annotate(annotated_frame, text_detections, labels)
+        for i, text in enumerate(last_texts):
+            wrapped_lines = wrap_text(text, max_line_length=30)  # Wrap text to fit within box
+            x1, y1, x2, y2 = map(int, current_boxes[i])
+
+            # Position for the first line
+            y_offset = y1 + 20  # Starting from a small offset from the top of the box
+            for line in wrapped_lines:
+                cv2.putText(annotated_frame, line, (x1, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                y_offset += 20  # Move down for the next line of text
 
     cv2.imshow("Live Detection + OCR", annotated_frame)
 
