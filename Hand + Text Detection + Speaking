@@ -1,0 +1,50 @@
+import cv2
+import pytesseract
+import pyttsx3
+import mediapipe as mp
+
+# Initialize MediaPipe Hands for gesture detection
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands()
+
+# Initialize text-to-speech
+engine = pyttsx3.init()
+
+# Capture webcam feed
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+
+    # Process the frame for hand gesture recognition
+    results = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+    if results.multi_hand_landmarks:
+        for landmarks in results.multi_hand_landmarks:
+            # Detect pointing gesture (this is simplified for now)
+            # (You can use the position of the index finger tip here)
+            pointing_position = (landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x,
+                                 landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].y)
+
+            # YOLO text detection
+            text_boxes = yolo_model.detect(frame)  # Assuming you have a YOLO model to detect text
+
+            for box in text_boxes:
+                # Check if the pointing gesture is pointing at the text box
+                if is_pointing_at_box(box, pointing_position):
+                    # Extract the text box region
+                    region = extract_region_from_box(frame, box)
+                    text = pytesseract.image_to_string(region)
+
+                    # Read out the text
+                    engine.say(text)
+                    engine.runAndWait()
+
+    # Display the video feed
+    cv2.imshow('Frame', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
