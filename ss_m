@@ -1,0 +1,146 @@
+import cv2
+import mediapipe as mp
+import pytesseract
+from datetime import datetime
+from collections import deque
+
+# ——— Configuration ———
+mp_hands     = mp.solutions.hands
+mp_drawing   = mp.solutions.drawing_utils
+PINCH_THRESH = 0.05    # normalized pinch threshold
+DEBOUNCE_FRAMES = 5    # how many frames needed to confirm a pinch
+SMOOTH_WINDOW   = 5    # how many samples to average for corner pos
+
+cap = cv2.VideoCapture(0)
+
+# State
+first_corner    = None
+rectangles      = []  # (pt1, pt2, text)
+pinch_history   = deque(maxlen=DEBOUNCE_FRAMES)
+pos_history     = deque(maxlen=SMOOTH_WINDOW)
+pinch_confirmed = False
+
+def get_smoothed_pos():
+    xs = [p[0] for p in pos_history]
+    ys = [p[1] for p in pos_history]
+    return (int(sum(xs)/len(xs)), int(sum(ys)/len(ys))) if pos_history else None
+
+def extract_and_ocr(frame, p1, p2):
+    # 1) Crop & normalize
+    x1, y1 = p1; x2, y2 = p2
+    x0, x1 = sorted([x1, x2])
+    y0, y1 = sorted([y1, y2])
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0:
+        print("⚠️ Empty ROI!")
+        return ""
+
+    # 2) Pre‑process for OCR
+    #    a) convert to gray
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    #    b) upscale (makes small text more legible)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    #    c) adaptive threshold
+    gray = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        blockSize=15,
+        C=8
+    )
+
+    # 3) (Optional) Show the pre‑processed ROI for debugging
+    cv2.imshow("ROI for OCR", gray)
+
+    # 4) OCR with explicit config
+    custom_cfg = r'--oem 1 --psm 6'
+    text = pytesseract.image_to_string(gray, config=custom_cfg).strip()
+    if not text:
+        print("⚠️ Tesseract returned no text. Try adjusting threshold or lighting.")
+    else:
+        print("[OCR] “%s”" % text.replace("\n", "\\n"))
+
+    # 5) Save the (original) ROI for your records
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"rect_{ts}.png"
+    cv2.imwrite(fname, roi)
+    print(f"[Saved] {fname}")
+
+    return text
+
+
+with mp_hands.Hands(
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.7) as hands:
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Invert / flip as you like
+        # frame = cv2.flip(frame, 1)
+        h, w, _ = frame.shape
+
+        # 1) Detect hand and compute pinch distance + midpoint
+        results = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        pinch_now = False
+        raw_pos   = None
+
+        if results.multi_hand_landmarks:
+            lm = results.multi_hand_landmarks[0].landmark
+            dx = lm[4].x - lm[8].x
+            dy = lm[4].y - lm[8].y
+            if (dx*dx + dy*dy)**0.5 < PINCH_THRESH:
+                pinch_now = True
+                mx = int((lm[4].x + lm[8].x)/2 * w)
+                my = int((lm[4].y + lm[8].y)/2 * h)
+                raw_pos = (mx, my)
+                pos_history.append(raw_pos)
+            mp_drawing.draw_landmarks(frame, results.multi_hand_landmarks[0], mp_hands.HAND_CONNECTIONS)
+
+        # 2) Debounce pinch
+        pinch_history.append(pinch_now)
+        if len(pinch_history) == DEBOUNCE_FRAMES and all(pinch_history):
+            if not pinch_confirmed:
+                # confirmed pinch‐start
+                pinch_confirmed = True
+                corner_pos = get_smoothed_pos()
+                if corner_pos:
+                    if first_corner is None:
+                        first_corner = corner_pos
+                        print("First corner:", first_corner)
+                    else:
+                        # second corner → finalize
+                        second_corner = corner_pos
+                        text = extract_and_ocr(frame, first_corner, second_corner)
+                        rectangles.append((first_corner, second_corner, text))
+                        first_corner = None
+            # once pinched, keep pinch_confirmed True until release
+        else:
+            if pinch_confirmed and not pinch_now:
+                # pinch released
+                pinch_confirmed = False
+                pos_history.clear()  # reset smoothing for next pinch
+
+        # 3) Visualize
+        for (p1, p2, txt) in rectangles:
+            cv2.rectangle(frame, p1, p2, (0,255,0), 2)
+            # draw text inside
+            x0, y0 = p1
+            for i, line in enumerate(txt.splitlines()):
+                cv2.putText(frame, line,
+                            (x0+5, y0 + 20 + i*25),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (0,255,0), 2, cv2.LINE_AA)
+
+        # show active first corner
+        if first_corner:
+            cv2.circle(frame, first_corner, 6, (0,0,255), -1)
+
+        cv2.imshow("Accurate Pinch‐to‐Rect", frame)
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+cap.release()
+cv2.destroyAllWindows()
